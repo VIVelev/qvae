@@ -46,14 +46,14 @@ class GMEmbedding(nn.Module):
         self.num_embeddings = num_embeddings
 
         # Gaussian Embeddings
-        self.embeddings_mu = nn.Embedding(num_embeddings, embedding_dim)
-        self.embeddings_mu.weight.data.uniform_(-1/num_embeddings, 1/num_embeddings)
+        self.embeddings_mu = torch.empty(num_embeddings, embedding_dim,
+            device=self._device).uniform_(-1/num_embeddings, 1/num_embeddings)
 
-        self.embeddings_logvar = nn.Embedding(num_embeddings, embedding_dim)
-        self.embeddings_logvar.weight.data.uniform_(-1/num_embeddings, 1/num_embeddings)
+        self.embeddings_logvar = torch.empty(num_embeddings, embedding_dim,
+            device=self._device).uniform_(-1/num_embeddings, 1/num_embeddings)
 
-        self.embeddings_pi = nn.Embedding(num_embeddings, num_embeddings)
-        self.embeddings_pi.weight.data.uniform_(-1/num_embeddings, 1/num_embeddings)
+        self.embeddings_pi = torch.empty(num_embeddings, num_embeddings,
+            device=self._device).uniform_(-1/num_embeddings, 1/num_embeddings)
 
         # Gaussian Batch-Parameters
         self._batch_mu = []
@@ -65,9 +65,9 @@ class GMEmbedding(nn.Module):
     def _init_random_batch_gaussians(self):
         '''Initialize gaussians randomly'''
 
-        self._batch_mu = torch.randn(self.num_embeddings, self.embedding_dim, requires_grad=False, device=self._device)
-        self._batch_logvar = torch.ones(self.num_embeddings, self.embedding_dim, requires_grad=False, device=self._device)
-        self._batch_pi = torch.empty(self.num_embeddings, self.num_embeddings, requires_grad=False, device=self._device).fill_(1. / self.num_embeddings)
+        self._batch_mu = torch.randn(self.num_embeddings, self.embedding_dim, device=self._device)
+        self._batch_logvar = torch.ones(self.num_embeddings, self.embedding_dim, device=self._device)
+        self._batch_pi = torch.empty(self.num_embeddings, self.num_embeddings, device=self._device).fill_(1. / self.num_embeddings)
 
     def log_gaussian(self, x, mu, logvar):
         logexp = -0.5 * (logvar + ((x - mu) ** 2) / logvar.exp())
@@ -135,23 +135,24 @@ class GMEmbedding(nn.Module):
         # Flatten input
         x_flatten = x.reshape(-1, self.embedding_dim)
 
-        # Run EM for `num_iter` iterations
-        for _ in range(self.num_iter):
-            self._update_batch_parameters(x_flatten)
+        with torch.no_grad():
+            # Run EM for `num_iter` iterations
+            for _ in range(self.num_iter):
+                self._update_batch_parameters(x_flatten)
 
-        # Update Embeddings
-        self.embeddings_mu.weight.data = self.beta * self.embeddings_mu.weight.data + (1 - self.beta) * self._batch_mu
-        self.embeddings_logvar.weight.data = self.beta * self.embeddings_logvar.weight.data + (1 - self.beta) * self._batch_logvar
-        self.embeddings_pi.weight.data = self.beta * self.embeddings_pi.weight.data + (1 - self.beta) * self._batch_pi
+            # Update Embeddings
+            self.embeddings_mu = self.beta * self.embeddings_mu + (1 - self.beta) * self._batch_mu
+            self.embeddings_logvar = self.beta * self.embeddings_logvar + (1 - self.beta) * self._batch_logvar
+            self.embeddings_pi = self.beta * self.embeddings_pi + (1 - self.beta) * self._batch_pi
 
-        # Encoding
-        encoding_indices = self._get_likelihoods(x_flatten, log=False).T.argmax(1, keepdim=True)
-        encodings = torch.zeros(encoding_indices.shape[0], self.num_embeddings, requires_grad=False, device=self._device)
-        encodings.scatter_(1, encoding_indices, 1)
-        
-        # Quantize
-        quantized = encodings @ self.embeddings_mu.weight
-        quantized_reshaped = quantized.reshape(input_shape).permute(0, 3, 1, 2)
+            # Encoding
+            encoding_indices = self._get_likelihoods(x_flatten, log=False).T.argmax(1, keepdim=True)
+            encodings = torch.zeros(encoding_indices.shape[0], self.num_embeddings, device=self._device)
+            encodings.scatter_(1, encoding_indices, 1)
+            
+            # Quantize
+            quantized = encodings @ self.embeddings_mu
+            quantized_reshaped = quantized.reshape(input_shape).permute(0, 3, 1, 2)
         
         return encodings, quantized_reshaped
 
