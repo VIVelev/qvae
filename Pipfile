@@ -11,6 +11,7 @@ pylint = "*"
 torch = "*"
 torchvision = "*"
 matplotlib = "*"
+scikit-learn = "*"
 
 [requires]
 python_version = "3.7"

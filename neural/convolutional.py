@@ -74,7 +74,7 @@ class ResEncoder(nn.Module):
 
 class ResDecoder(nn.Module):
 
-    def __init__(self, in_channels, num_hiddens, num_res_hiddens, num_res_layers, rgb=True):
+    def __init__(self, in_channels, num_hiddens, num_res_hiddens, num_res_layers, rgb_out=True):
         super(ResDecoder, self).__init__()
 
         self.conv_1 = nn.Conv2d(in_channels, num_hiddens,
@@ -85,7 +85,7 @@ class ResDecoder(nn.Module):
         self.conv_trans_1 = nn.ConvTranspose2d(num_hiddens, num_hiddens//2,
                         kernel_size=4, stride=2, padding=1)
         
-        self.conv_trans_2 = nn.ConvTranspose2d(num_hiddens//2, 3 if rgb else 1,
+        self.conv_trans_2 = nn.ConvTranspose2d(num_hiddens//2, 3 if rgb_out else 1,
                         kernel_size=4, stride=2, padding=1)
 
     def forward(self, x):

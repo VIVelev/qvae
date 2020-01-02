@@ -1,11 +1,9 @@
-from .autoencoder import AutoEncoder
-from .mixq_vae import MixqVAE
+from .qvae import QVAE
 from .vae import VAE
 from .vqvae import VQVAE
 
 __all__ = [
-    'AutoEncoder',
-    'MixqVAE',
+    'QVAE',
     'VAE',
     'VQVAE',
 ]
