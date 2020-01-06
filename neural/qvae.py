@@ -55,7 +55,7 @@ class Quantizer(nn.Module):
 
                 samples = torch.cat((
                     x_flatten,
-                    *(self.embeddings.weight.data,) * self.min_cluster_size
+                    self.embeddings.weight.data,
                 ))
 
                 # Run HDBSCAN
@@ -90,7 +90,7 @@ class Quantizer(nn.Module):
                 ###               Adding new / Removing embeddings if necessary              ###
 
                 transformer = torch.zeros(num_clusters, self.num_embeddings, device=x.device)
-                transformer.scatter_(0, non_noise_labels[:, x_flatten.shape[0]:], 1)
+                transformer.scatter_(0, non_noise_labels[:, -self.num_embeddings:], 1)
                 transformer *= 1 / (transformer.sum(1, keepdim=True) + 1e-9)
 
                 self.ema_normalizer.data = transformer @ self.ema_normalizer.data
