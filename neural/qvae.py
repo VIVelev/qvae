@@ -4,8 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import numpy as np
-from sklearn.cluster import DBSCAN
+from hdbscan import HDBSCAN
 
 from .convolutional import ResDecoder, ResEncoder
 
@@ -17,14 +16,13 @@ __all__ = [
 
 class Quantizer(nn.Module):
 
-    def __init__(self, embedding_dim=8, beta=0.99, lmbd=0.01, eps=0.5, min_samples=10, laplace_coeff=1e-5):
+    def __init__(self, embedding_dim=8, min_cluster_size=5, beta=0.99, lmbd=0.1, laplace_coeff=1e-5):
         super(Quantizer, self).__init__()
 
         self.embedding_dim = embedding_dim
+        self.min_cluster_size = min_cluster_size
         self.beta = beta
         self.lmbd = lmbd
-        self.eps = eps
-        self.min_samples = min_samples
         self.laplace_coeff = laplace_coeff
 
         #####################
@@ -52,29 +50,33 @@ class Quantizer(nn.Module):
 
         with torch.no_grad():
 
-             # Use DBSCAN & EMA to update the embedding vectors
-            if self.train:
+            # Use HDBSCAN & EMA to update the embedding vectors
+            if self.training:
 
                 samples = torch.cat((
                     x_flatten,
-                    self.embeddings.weight.data,
+                    *(self.embeddings.weight.data,) * self.min_cluster_size
                 ))
 
-                sample_weight = [1] * x_flatten.shape[0] + [self.min_samples] * self.num_embeddings
+                # Run HDBSCAN
+                hdb = HDBSCAN(
+                    min_cluster_size=self.min_cluster_size,
+                    core_dist_n_jobs=-1,
+                ).fit(samples.detach().cpu().numpy())
 
-                # Run DBSCAN
-                db = DBSCAN(eps=self.eps, min_samples=self.min_samples,
-                            n_jobs=-1).fit(samples.detach().numpy(), sample_weight=sample_weight)
-
-                # Ignoring noise
-                non_noise_labels = db.labels_[db.labels_ != -1]
+                # Drop noise
+                non_noise_labels = hdb.labels_[hdb.labels_ != -1]
                 num_clusters = len(set(non_noise_labels))
-                label2count = dict(zip(*np.unique(non_noise_labels, return_counts=True)))
+                
+                non_noise_labels = torch.from_numpy(non_noise_labels).long().to(x.device).unsqueeze(0)
+                non_noise_samples = samples[hdb.labels_ != -1, :]
 
                 # Compute batch embeddings
-                batch_embeddings = torch.zeros(num_clusters, self.embedding_dim, device=x.device)
-                for i in db.core_sample_indices_:
-                    batch_embeddings[db.labels_[i]] += samples[i] * (1/label2count[db.labels_[i]])
+                transformer = torch.zeros(num_clusters, non_noise_samples.shape[0], device=x.device)
+                transformer.scatter_(0, non_noise_labels, 1)
+                transformer *= 1 / (transformer.sum(1, keepdim=True) + 1e-9)
+
+                batch_embeddings = transformer @ non_noise_samples
 
                 # Calculate distances (Euclidean distance)
                 distances = torch.norm(x_flatten[:, None, :] - batch_embeddings[None, :, :], dim=2)
@@ -87,12 +89,8 @@ class Quantizer(nn.Module):
                 ################################################################################
                 ###               Adding new / Removing embeddings if necessary              ###
 
-                labels = torch.from_numpy(
-                    db.labels_[x_flatten.shape[0]:]
-                ).long().to(x.device).unsqueeze(0)
-
                 transformer = torch.zeros(num_clusters, self.num_embeddings, device=x.device)
-                transformer.scatter_(0, labels, 1)
+                transformer.scatter_(0, non_noise_labels[:, x_flatten.shape[0]:], 1)
                 transformer *= 1 / (transformer.sum(1, keepdim=True) + 1e-9)
 
                 self.ema_normalizer.data = transformer @ self.ema_normalizer.data
@@ -111,7 +109,6 @@ class Quantizer(nn.Module):
 
                 self.embeddings.weight.data = self.ema_weight.data / self.ema_normalizer.data
                 self.num_embeddings = num_clusters
-
 
             # Calculate distances (Euclidean distance)
             distances = torch.norm(x_flatten[:, None, :] - self.embeddings.weight.data[None, :, :], dim=2)
@@ -134,7 +131,7 @@ class Quantizer(nn.Module):
 class QVAE(nn.Module):
 
     def __init__(self, in_channels=3, num_hiddens=128, num_res_hiddens=32, num_res_layers=2, rgb_out=True,
-                    embedding_dim=8, beta=0.99, lmbd=0.01, eps=0.5, min_samples=10, laplace_coeff=1e-5):
+                    embedding_dim=8, min_cluster_size=5, beta=0.99, lmbd=0.1, laplace_coeff=1e-5):
 
         super(QVAE, self).__init__()
 
@@ -143,7 +140,7 @@ class QVAE(nn.Module):
         self.pre_qunatization_conv = nn.Conv2d(num_hiddens, embedding_dim, 
                 kernel_size=1, stride=1)
 
-        self.quantizer = Quantizer(embedding_dim, beta, lmbd, eps, min_samples, laplace_coeff)
+        self.quantizer = Quantizer(embedding_dim, min_cluster_size, beta, lmbd, laplace_coeff)
 
         self.decoder = ResDecoder(embedding_dim, num_hiddens, num_res_hiddens, num_res_layers, rgb_out=rgb_out)
 

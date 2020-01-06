@@ -12,6 +12,7 @@ torch = "*"
 torchvision = "*"
 matplotlib = "*"
 scikit-learn = "*"
+hdbscan = "*"
 
 [requires]
 python_version = "3.7"
