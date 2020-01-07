@@ -19,13 +19,15 @@ class Quantizer(nn.Module):
     def __init__(self, embedding_dim=8, min_cluster_size=5, beta=0.99, lmbd=0.1, laplace_coeff=1e-5):
         super(Quantizer, self).__init__()
 
+        ### NN Hyperparameters ###
+
         self.embedding_dim = embedding_dim
         self.min_cluster_size = min_cluster_size
         self.beta = beta
         self.lmbd = lmbd
         self.laplace_coeff = laplace_coeff
 
-        #####################
+        ##############################
 
         self.num_embeddings = 1
 
@@ -38,7 +40,7 @@ class Quantizer(nn.Module):
         self.ema_normalizer = nn.Parameter(torch.zeros(self.num_embeddings, 1), requires_grad=False)
         self.ema_weight = nn.Parameter(torch.randn(self.num_embeddings, embedding_dim), requires_grad=False)
 
-        #####################
+        ##############################
 
     def forward(self, x):
         # Convert inputs `x` from BCHW -> BHWC
@@ -75,12 +77,7 @@ class Quantizer(nn.Module):
 
                     # Compute batch embeddings
                     transformer = torch.zeros(num_clusters, non_noise_samples.shape[0], device=x.device)
-                    try:
-                        transformer.scatter_(0, non_noise_labels, 1)
-                    except RuntimeError as e:
-                        print(e)
-                        print("Num Clusters:", num_clusters)
-                        print("Non-noise labels:", non_noise_labels)
+                    transformer.scatter_(0, non_noise_labels, 1)
                     transformer *= 1 / (transformer.sum(1, keepdim=True) + 1e-9)
 
                     batch_embeddings = transformer @ non_noise_samples
@@ -116,6 +113,8 @@ class Quantizer(nn.Module):
 
                     self.embeddings.weight.data = self.ema_weight.data / self.ema_normalizer.data
                     self.num_embeddings = num_clusters
+
+            ################################################################
 
             # Calculate distances (Euclidean distance)
             distances = torch.norm(x_flatten[:, None, :] - self.embeddings.weight.data[None, :, :], dim=2)
