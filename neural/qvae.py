@@ -67,48 +67,55 @@ class Quantizer(nn.Module):
                 # Drop noise
                 non_noise_labels = hdb.labels_[hdb.labels_ != -1]
                 num_clusters = len(set(non_noise_labels))
-                
-                non_noise_labels = torch.from_numpy(non_noise_labels).long().to(x.device).unsqueeze(0)
-                non_noise_samples = samples[hdb.labels_ != -1, :]
 
-                # Compute batch embeddings
-                transformer = torch.zeros(num_clusters, non_noise_samples.shape[0], device=x.device)
-                transformer.scatter_(0, non_noise_labels, 1)
-                transformer *= 1 / (transformer.sum(1, keepdim=True) + 1e-9)
+                if num_clusters > 0:
 
-                batch_embeddings = transformer @ non_noise_samples
+                    non_noise_labels = torch.from_numpy(non_noise_labels).long().to(x.device).unsqueeze(0)
+                    non_noise_samples = samples[hdb.labels_ != -1]
 
-                # Calculate distances (Euclidean distance)
-                distances = torch.norm(x_flatten[:, None, :] - batch_embeddings[None, :, :], dim=2)
+                    # Compute batch embeddings
+                    transformer = torch.zeros(num_clusters, non_noise_samples.shape[0], device=x.device)
+                    try:
+                        transformer.scatter_(0, non_noise_labels, 1)
+                    except RuntimeError as e:
+                        print(e)
+                        print("Num Clusters:", num_clusters)
+                        print("Non-noise labels:", non_noise_labels)
+                    transformer *= 1 / (transformer.sum(1, keepdim=True) + 1e-9)
 
-                # Encoding
-                encoding_indices = torch.argmin(distances, dim=1, keepdim=True)
-                encodings = torch.zeros(encoding_indices.shape[0], num_clusters, device=x.device)
-                encodings.scatter_(1, encoding_indices, 1)
+                    batch_embeddings = transformer @ non_noise_samples
 
-                ################################################################################
-                ###               Adding new / Removing embeddings if necessary              ###
+                    # Calculate distances (Euclidean distance)
+                    distances = torch.norm(x_flatten[:, None, :] - batch_embeddings[None, :, :], dim=2)
 
-                transformer = torch.zeros(num_clusters, self.num_embeddings, device=x.device)
-                transformer.scatter_(0, non_noise_labels[:, -self.num_embeddings:], 1)
-                transformer *= 1 / (transformer.sum(1, keepdim=True) + 1e-9)
+                    # Encoding
+                    encoding_indices = torch.argmin(distances, dim=1, keepdim=True)
+                    encodings = torch.zeros(encoding_indices.shape[0], num_clusters, device=x.device)
+                    encodings.scatter_(1, encoding_indices, 1)
 
-                self.ema_normalizer.data = transformer @ self.ema_normalizer.data
-                self.ema_weight.data = transformer @ self.ema_weight.data
+                    ################################################################################
+                    ###               Adding new / Removing embeddings if necessary              ###
 
-                ################################################################################
+                    transformer = torch.zeros(num_clusters, self.num_embeddings, device=x.device)
+                    transformer.scatter_(0, non_noise_labels[:, -self.num_embeddings:], 1)
+                    transformer *= 1 / (transformer.sum(1, keepdim=True) + 1e-9)
 
-                ### Use EMA to update the embedding vectors ###
+                    self.ema_normalizer.data = transformer @ self.ema_normalizer.data
+                    self.ema_weight.data = transformer @ self.ema_weight.data
 
-                self.ema_normalizer.data = self.beta * self.ema_normalizer.data + (1 - self.beta) * encodings.sum(0, keepdim=True).T
-                # Laplace smoothing of the ema_normalizer
-                n = self.ema_normalizer.data.sum()
-                self.ema_normalizer.data = (self.ema_normalizer.data + self.laplace_coeff) / (n + num_clusters * self.laplace_coeff) * n
+                    ################################################################################
 
-                self.ema_weight.data = self.beta * self.ema_weight.data + (1 - self.beta) * (encodings.T @ x_flatten)
+                    ### Use EMA to update the embedding vectors ###
 
-                self.embeddings.weight.data = self.ema_weight.data / self.ema_normalizer.data
-                self.num_embeddings = num_clusters
+                    self.ema_normalizer.data = self.beta * self.ema_normalizer.data + (1 - self.beta) * encodings.sum(0, keepdim=True).T
+                    # Laplace smoothing of the ema_normalizer
+                    n = self.ema_normalizer.data.sum()
+                    self.ema_normalizer.data = (self.ema_normalizer.data + self.laplace_coeff) / (n + num_clusters * self.laplace_coeff) * n
+
+                    self.ema_weight.data = self.beta * self.ema_weight.data + (1 - self.beta) * (encodings.T @ x_flatten)
+
+                    self.embeddings.weight.data = self.ema_weight.data / self.ema_normalizer.data
+                    self.num_embeddings = num_clusters
 
             # Calculate distances (Euclidean distance)
             distances = torch.norm(x_flatten[:, None, :] - self.embeddings.weight.data[None, :, :], dim=2)
